@@ -18,18 +18,59 @@ const GeoJSON = dynamic(
 );
 
 const months = [
-  { id: 1, name: "Januari", code: "1" },
-  { id: 2, name: "Februari", code: "2" },
-  { id: 3, name: "Maret", code: "3" },
-  { id: 4, name: "April", code: "4" },
-  { id: 5, name: "Mei", code: "5" },
+  { id: 1, name: "Januari", code: "1", quarter: 1 },
+  { id: 2, name: "Februari", code: "2", quarter: 1 },
+  { id: 3, name: "Maret", code: "3", quarter: 1 },
+  { id: 4, name: "April", code: "4", quarter: 2 },
+  { id: 5, name: "Mei", code: "5", quarter: 2 },
+  { id: 6, name: "Juni", code: "6", quarter: 2 },
+  { id: 7, name: "Juli", code: "7", quarter: 3 },
+  { id: 8, name: "Agustus", code: "8", quarter: 3 },
+  { id: 9, name: "September", code: "9", quarter: 3 },
+  { id: 10, name: "Oktober", code: "10", quarter: 4 },
+  { id: 11, name: "November", code: "11", quarter: 4 },
+  { id: 12, name: "Desember", code: "12", quarter: 4 },
+
+];
+
+const quarters = [
+  { id: 1, name: "Kuartal 1 (Jan-Mar)", months: months.filter(m => m.quarter === 1) },
+  { id: 2, name: "Kuartal 2 (Apr-Jun)", months: months.filter(m => m.quarter === 2) },
+  { id: 3, name: "Kuartal 3 (Jul-Sep)", months: months.filter(m => m.quarter === 3) },
+  { id: 4, name: "Kuartal 4 (Okt-Des)", months: months.filter(m => m.quarter === 4) },
 ];
 
 const Map = () => {
   const [geoData, setGeoData] = useState(null);
   const [bpsData, setBpsData] = useState(null);
+  const [historicalData, setHistoricalData] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(months[0]);
+  
+  // Menentukan kuartal saat ini berdasarkan waktu saat ini
+  const getCurrentQuarter = () => {
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth() + 1; // getMonth() returns 0-11
+    
+    // Menentukan kuartal berdasarkan bulan saat ini
+    let currentQuarterId;
+    if (currentMonth >= 1 && currentMonth <= 3) {
+      currentQuarterId = 1; // Q1 (Jan-Mar)
+    } else if (currentMonth >= 4 && currentMonth <= 6) {
+      currentQuarterId = 2; // Q2 (Apr-Jun)
+    } else if (currentMonth >= 7 && currentMonth <= 9) {
+      currentQuarterId = 3; // Q3 (Jul-Sep)
+    } else {
+      currentQuarterId = 4; // Q4 (Oct-Dec)
+    }
+    
+    // Memastikan kita tidak memilih kuartal yang tidak ada dalam daftar
+    const availableQuarterId = Math.min(currentQuarterId, quarters.length);
+    return quarters.find(q => q.id === availableQuarterId) || quarters[0];
+  };
+  
+  // Inisialisasi dengan kuartal saat ini
+  const [selectedQuarter, setSelectedQuarter] = useState(getCurrentQuarter());
   const geoJsonRef = useRef(null);
   const [isClient, setIsClient] = useState(false);
 
@@ -50,6 +91,16 @@ const Map = () => {
       const data = await res.json();
       if (data.status === "OK" && data["data-availability"] === "available") {
         setBpsData(data);
+        // Ekstrak data historis untuk setiap bulan
+        const historicalDataObj = {};
+        
+        // Iterasi melalui semua bulan untuk mengekstrak data historis
+        months.forEach(month => {
+          const monthlyData = extractDataFromBpsResponse(data, month.code);
+          historicalDataObj[month.code] = monthlyData;
+        });
+        
+        setHistoricalData(historicalDataObj);
       } else {
         console.error("Invalid BPS response", data);
         setBpsData(null);
@@ -89,25 +140,101 @@ const Map = () => {
 
       const key = `${provCode}25060125${monthCode}`;
       if (data.datacontent[key]) {
-        result[provCode] = data.datacontent[key];
+        result[provCode] = parseFloat(data.datacontent[key]);
       }
     });
 
     return result;
   }, []);
 
-  const updateGeoDataWithRiceData = useCallback(
-    (geo, bps, monthCode) => {
-      if (!geo || !bps) return geo;
+  // Fungsi untuk menghitung tren perbandingan kuartal
+  const calculateTrend = useCallback((provinceCode, currentQuarter) => {
+    // Dapatkan kuartal saat ini dan kuartal sebelumnya
+    const previousQuarter = currentQuarter - 1;
+    
+    // Jika tidak ada kuartal sebelumnya, tidak bisa menghitung tren
+    if (previousQuarter < 1) {
+      return { trend: "nodata", data: [] };
+    }
+    
+    // Dapatkan bulan-bulan yang termasuk dalam kuartal saat ini dan sebelumnya
+    const currentQuarterMonths = months.filter(m => m.quarter === currentQuarter);
+    const previousQuarterMonths = months.filter(m => m.quarter === previousQuarter);
+    
+    // Hitung total produksi untuk kuartal saat ini
+    let currentQuarterTotal = 0;
+    let currentQuarterMonthsWithData = 0;
+    currentQuarterMonths.forEach(month => {
+      const value = historicalData[month.code]?.[provinceCode] || 0;
+      if (value > 0) {
+        currentQuarterTotal += value;
+        currentQuarterMonthsWithData++;
+      }
+    });
+    
+    // Hitung total produksi untuk kuartal sebelumnya
+    let previousQuarterTotal = 0;
+    let previousQuarterMonthsWithData = 0;
+    previousQuarterMonths.forEach(month => {
+      const value = historicalData[month.code]?.[provinceCode] || 0;
+      if (value > 0) {
+        previousQuarterTotal += value;
+        previousQuarterMonthsWithData++;
+      }
+    });
+    
+    // Jika tidak ada data yang cukup dari salah satu kuartal, tidak bisa dihitung trendnya
+    if (currentQuarterMonthsWithData === 0 || previousQuarterMonthsWithData === 0) {
+      return { trend: "nodata", data: [] };
+    }
+    
+    // Hitung rata-rata per kuartal untuk perbandingan yang adil
+    const currentQuarterAvg = currentQuarterTotal / currentQuarterMonthsWithData;
+    const previousQuarterAvg = previousQuarterTotal / previousQuarterMonthsWithData;
+    
+    // Hitung persentase perubahan
+    const percentChange = ((currentQuarterAvg - previousQuarterAvg) / previousQuarterAvg) * 100;
+    
+    // Tentukan tren berdasarkan perubahan persentase
+    let trend;
+    if (percentChange > 5) trend = "up"; // Naik jika lebih dari 5%
+    else if (percentChange < -5) trend = "down"; // Turun jika kurang dari -5%
+    else trend = "stable"; // Stabil jika perubahannya kecil
+    
+    // Kumpulkan data untuk ditampilkan
+    const quarterData = [
+      { quarter: previousQuarter, value: previousQuarterAvg, total: previousQuarterTotal, months: previousQuarterMonthsWithData },
+      { quarter: currentQuarter, value: currentQuarterAvg, total: currentQuarterTotal, months: currentQuarterMonthsWithData }
+    ];
+    
+    return { 
+      trend, 
+      data: quarterData,
+      percentChange: percentChange
+    };
+  }, [historicalData]);
 
-      const riceData = extractDataFromBpsResponse(bps, monthCode);
+  const updateGeoDataWithTrendData = useCallback(
+    (geo, bps, quarterObj) => {
+      if (!geo || !bps || Object.keys(historicalData).length === 0) return geo;
+
       const cloned = JSON.parse(JSON.stringify(geo));
+      // Ambil data dari bulan terakhir dalam kuartal untuk nilai saat ini
+      const lastMonthInQuarter = quarterObj.months[quarterObj.months.length - 1];
+      const currentDataByProvince = extractDataFromBpsResponse(bps, lastMonthInQuarter.code);
 
       cloned.features.forEach((feature) => {
         const code = feature.properties.kode || feature.properties.REGION_CODE;
         if (code === "9999") return;
+        
+        const currentValue = currentDataByProvince[code] || 0;
+        const { trend, data, percentChange } = calculateTrend(code, quarterObj.id);
+        
         feature.properties.riceData = {
-          nilai: riceData[code] || 0,
+          nilai: currentValue,
+          trendData: data,
+          trend: trend,
+          percentChange: percentChange || 0,
           satuan: "Ton",
           nama: feature.properties.name || feature.properties.nama,
         };
@@ -115,32 +242,56 @@ const Map = () => {
 
       return cloned;
     },
-    [extractDataFromBpsResponse]
+    [extractDataFromBpsResponse, calculateTrend, historicalData]
   );
 
-  const getColor = (value) => {
-    if (value == null || value === 0) return '#E5E5E5'; // putih: tidak ada data
-  
-    return value > 100000 ? '#00441b' :        // hijau tua
-           value > 50000  ? '#238b45' :        // hijau sedang
-           value > 25000  ? '#66bd63' :        // hijau muda
-           value > 1000  ? '#a6d96a' :        // kuning kehijauan
-           value > 500   ? '#fee08b' :        // kuning pucat
-           value > 250   ? '#fdae61' :        // oranye muda
-           value > 100   ? '#f46d43' :        // oranye tua
-           value > 10    ? '#d73027' :        // merah terang
-                             '#a50026';         // merah tua
+  const getColor = (trend) => {
+    switch (trend) {
+      case "up":
+        return "#27AE60"; // hijau untuk tren naik (> +5%)
+      case "down":
+        return "#E74C3C"; // merah untuk tren turun (< -5%)
+      case "stable":
+        return "#F1C40F"; // kuning untuk tren stabil (antara -5% sampai +5%)
+      case "nodata":
+      default:
+        return "#E5E5E5"; // abu-abu untuk tidak ada data
+    }
   };
 
   const geoJSONStyle = useCallback((feature) => {
-    const value = feature.properties?.riceData?.nilai || 0;
+    const trend = feature.properties?.riceData?.trend || "nodata";
     return {
-      fillColor: getColor(value),
+      fillColor: getColor(trend),
       weight: 1,
       color: "#FFF",
       fillOpacity: 0.7,
     };
   }, []);
+
+  const formatTrendData = (data) => {
+    if (!data || data.length < 2) return "Data tidak cukup";
+    
+    return data.map(quarter => {
+      return `Kuartal ${quarter.quarter}: ${quarter.total.toLocaleString("id-ID", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} Ton (${quarter.months} bulan)`;
+    }).join("<br />");
+  };
+
+  const getTrendIcon = (trend) => {
+    switch (trend) {
+      case "up":
+        return "↗️";
+      case "down":
+        return "↘️";
+      case "stable":
+        return "→";
+      default:
+        return "❓";
+    }
+  };
 
   const onEachFeature = useCallback(
     (feature, layer) => {
@@ -149,16 +300,32 @@ const Map = () => {
           const l = e.target;
           l.setStyle({ weight: 3, color: "#000", fillOpacity: 0.9 });
           const rice = feature.properties?.riceData?.nilai || 0;
+          const trend = feature.properties?.riceData?.trend || "nodata";
+          const trendData = feature.properties?.riceData?.trendData || [];
+          const percentChange = feature.properties?.riceData?.percentChange || 0;
           const name = feature.properties?.riceData?.nama || "";
           const satuan = feature.properties?.riceData?.satuan || "";
+          
+          const trendText = trend === "nodata" ? "Data tidak cukup" :
+                          trend === "up" ? "Naik" :
+                          trend === "down" ? "Turun" : "Stabil";
+          
+          const percentChangeFormatted = percentChange !== 0 
+            ? `(${percentChange > 0 ? "+" : ""}${percentChange.toFixed(2)}%)` 
+            : "";
+          
           l.bindTooltip(
-            `${name}<br />Produksi: ${rice.toLocaleString("id-ID", {
+            `<strong>${name}</strong><br />
+            Produksi Saat Ini: ${rice.toLocaleString("id-ID", {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
-            })} ${satuan}`,
+            })} ${satuan}<br />
+            Tren Kuartal: ${getTrendIcon(trend)} ${trendText} ${percentChangeFormatted}<br />
+            <small>${formatTrendData(trendData)}</small>`,
             {
               permanent: false,
               direction: "center",
+              className: "custom-tooltip",
             }
           ).openTooltip();
         },
@@ -172,19 +339,19 @@ const Map = () => {
     [geoJSONStyle]
   );
 
-  const handleMonthChange = (month) => {
-    setSelectedMonth(month);
+  const handleQuarterChange = (quarter) => {
+    setSelectedQuarter(quarter);
     if (geoJsonRef.current && geoData && bpsData) {
-      const updated = updateGeoDataWithRiceData(geoData, bpsData, month.code);
+      const updated = updateGeoDataWithTrendData(geoData, bpsData, quarter);
       geoJsonRef.current.clearLayers();
       geoJsonRef.current.addData(updated);
     }
   };
 
   const prepareGeoData = useCallback(() => {
-    if (!geoData || !bpsData) return null;
-    return updateGeoDataWithRiceData(geoData, bpsData, selectedMonth.code);
-  }, [geoData, bpsData, selectedMonth, updateGeoDataWithRiceData]);
+    if (!geoData || !bpsData || Object.keys(historicalData).length === 0) return null;
+    return updateGeoDataWithTrendData(geoData, bpsData, selectedQuarter);
+  }, [geoData, bpsData, selectedQuarter, updateGeoDataWithTrendData, historicalData]);
 
   if (!isClient) return <div>Loading map...</div>;
 
@@ -198,6 +365,10 @@ const Map = () => {
             left: "50%",
             transform: "translate(-50%,-50%)",
             zIndex: 1000,
+            background: "white",
+            padding: "20px",
+            borderRadius: "5px",
+            boxShadow: "0 0 10px rgba(0,0,0,0.2)"
           }}
         >
           Loading data...
@@ -209,7 +380,7 @@ const Map = () => {
         style={{ width: "100%", height: "100%" }}
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        {geoData && bpsData && (
+        {geoData && bpsData && Object.keys(historicalData).length > 0 && (
           <GeoJSON
             data={prepareGeoData()}
             style={geoJSONStyle}
@@ -228,19 +399,20 @@ const Map = () => {
           background: "white",
           padding: "10px",
           borderRadius: "5px",
+          boxShadow: "0 0 10px rgba(0,0,0,0.2)"
         }}
       >
-        <label>Pilih Bulan: </label>
+        <label>Pilih Kuartal: </label>
         <select
-          value={selectedMonth.id}
+          value={selectedQuarter.id}
           onChange={(e) => {
-            const month = months.find((m) => m.id === parseInt(e.target.value));
-            handleMonthChange(month);
+            const quarter = quarters.find((q) => q.id === parseInt(e.target.value));
+            handleQuarterChange(quarter);
           }}
         >
-          {months.map((month) => (
-            <option key={month.id} value={month.id}>
-              {month.name}
+          {quarters.map((quarter) => (
+            <option key={quarter.id} value={quarter.id}>
+              {quarter.name}
             </option>
           ))}
         </select>
@@ -255,107 +427,42 @@ const Map = () => {
           background: "white",
           padding: "10px",
           borderRadius: "5px",
+          boxShadow: "0 0 10px rgba(0,0,0,0.2)"
         }}
       >
-        <h4>Legenda (Ton)</h4>
+        <h4>Tren Produksi Per Kuartal</h4>
         <div>
           <span
             style={{
-              background: "#00441b",
+              background: "#27AE60",
               width: "20px",
               height: "10px",
               display: "inline-block",
             }}
           ></span>{" "}
-          &gt; 2,000,000
+          Naik ↗️
         </div>
         <div>
           <span
             style={{
-              background: "#238b45",
+              background: "#E74C3C",
               width: "20px",
               height: "10px",
               display: "inline-block",
             }}
           ></span>{" "}
-          1,000,000 - 2,000,000
+          Turun ↘️
         </div>
         <div>
           <span
             style={{
-              background: "#66bd63",
+              background: "#F1C40F",
               width: "20px",
               height: "10px",
               display: "inline-block",
             }}
           ></span>{" "}
-          500,000 - 1,000,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#a6d96a",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          250,000 - 500,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#d9ef8b",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          100,000 - 250,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#fee08b",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          50,000 - 100,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#fdae61",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          25,000 - 50,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#f46d43",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          10,000 - 25,000
-        </div>
-        <div>
-          <span
-            style={{
-              background: "#d73027",
-              width: "20px",
-              height: "10px",
-              display: "inline-block",
-            }}
-          ></span>{" "}
-          0 - 10,000
+          Stabil →
         </div>
         <div>
           <span
@@ -366,9 +473,23 @@ const Map = () => {
               display: "inline-block",
             }}
           ></span>{" "}
-          Tidak ada data
+          Data Tidak Cukup
+        </div>
+        <div style={{ marginTop: "10px", fontSize: "0.8em" }}>
+          <i>Catatan: Tren dihitung berdasarkan perbandingan antara kuartal saat ini dan kuartal sebelumnya</i>
         </div>
       </div>
+
+      <style jsx global>{`
+        .custom-tooltip {
+          background: white;
+          border: 1px solid #ccc;
+          padding: 5px;
+          border-radius: 5px;
+          box-shadow: 0 0 10px rgba(0,0,0,0.2);
+          max-width: 300px;
+        }
+      `}</style>
     </div>
   );
 };
