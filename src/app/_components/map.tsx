@@ -30,7 +30,11 @@ const months = [
   { id: 10, name: "Oktober", code: "10", quarter: 4 },
   { id: 11, name: "November", code: "11", quarter: 4 },
   { id: 12, name: "Desember", code: "12", quarter: 4 },
+];
 
+const categories = [
+  { id: 'Beras', name: 'Padi', code: '2506' },
+  { id: 'jagung', name: 'Jagung Pipil', code: '2507' },
 ];
 
 const quarters = [
@@ -46,6 +50,7 @@ const Map = () => {
   const [historicalData, setHistoricalData] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(months[0]);
+  const [selectedCategory, setSelectedCategory] = useState(categories[0]);
   
   // Menentukan kuartal saat ini berdasarkan waktu saat ini
   const getCurrentQuarter = () => {
@@ -82,11 +87,14 @@ const Map = () => {
 
   const API_KEY = "5065bedad441b6074ff02c53c82931c9";
 
-  const fetchBpsData = useCallback(async () => {
+  const fetchBpsData = useCallback(async (category) => {
     setIsLoading(true);
+    // Use the passed category or the current selectedCategory
+    const categoryToFetch = category || selectedCategory;
+    
     try {
       const res = await fetch(
-        `https://webapi.bps.go.id/v1/api/list/model/data/lang/ind/domain/0000/var/2506/key/${API_KEY}`
+        `https://webapi.bps.go.id/v1/api/list/model/data/lang/ind/domain/0000/var/${categoryToFetch.code}/key/${API_KEY}`
       );
       const data = await res.json();
       if (data.status === "OK" && data["data-availability"] === "available") {
@@ -96,7 +104,8 @@ const Map = () => {
         
         // Iterasi melalui semua bulan untuk mengekstrak data historis
         months.forEach(month => {
-          const monthlyData = extractDataFromBpsResponse(data, month.code);
+          // Use the passed category for extraction
+          const monthlyData = extractDataFromBpsResponse(data, month.code, categoryToFetch);
           historicalDataObj[month.code] = monthlyData;
         });
         
@@ -104,18 +113,20 @@ const Map = () => {
       } else {
         console.error("Invalid BPS response", data);
         setBpsData(null);
+        setHistoricalData({});
       }
     } catch (err) {
       console.error("Fetch BPS error:", err);
       setBpsData(null);
+      setHistoricalData({});
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [selectedCategory]);
 
   useEffect(() => {
-    fetchBpsData();
-  }, [fetchBpsData]);
+    fetchBpsData(selectedCategory);
+  }, [fetchBpsData, selectedCategory]);
 
   useEffect(() => {
     const loadGeo = async () => {
@@ -130,22 +141,25 @@ const Map = () => {
     loadGeo();
   }, []);
 
-  const extractDataFromBpsResponse = useCallback((data, monthCode) => {
+  const extractDataFromBpsResponse = useCallback((data, monthCode, category) => {
     const result = {};
     if (!data || !data.datacontent || !data.vervar) return result;
+    
+    // Use the passed category or fall back to the selected category
+    const categoryToUse = category || selectedCategory;
 
     Object.keys(data.vervar).forEach((index) => {
       const provCode = data.vervar[index].val;
       if (provCode === "9999") return;
 
-      const key = `${provCode}25060125${monthCode}`;
+      const key = `${provCode}${categoryToUse.code}0125${monthCode}`;
       if (data.datacontent[key]) {
         result[provCode] = parseFloat(data.datacontent[key]);
       }
     });
 
     return result;
-  }, []);
+  }, [selectedCategory]);
 
   // Fungsi untuk menghitung tren perbandingan kuartal
   const calculateTrend = useCallback((provinceCode, currentQuarter) => {
@@ -215,13 +229,16 @@ const Map = () => {
   }, [historicalData]);
 
   const updateGeoDataWithTrendData = useCallback(
-    (geo, bps, quarterObj) => {
+    (geo, bps, quarterObj, category) => {
       if (!geo || !bps || Object.keys(historicalData).length === 0) return geo;
+
+      // Use the passed category or fall back to the selected category
+      const categoryToUse = category || selectedCategory;
 
       const cloned = JSON.parse(JSON.stringify(geo));
       // Ambil data dari bulan terakhir dalam kuartal untuk nilai saat ini
       const lastMonthInQuarter = quarterObj.months[quarterObj.months.length - 1];
-      const currentDataByProvince = extractDataFromBpsResponse(bps, lastMonthInQuarter.code);
+      const currentDataByProvince = extractDataFromBpsResponse(bps, lastMonthInQuarter.code, categoryToUse);
 
       cloned.features.forEach((feature) => {
         const code = feature.properties.kode || feature.properties.REGION_CODE;
@@ -230,19 +247,20 @@ const Map = () => {
         const currentValue = currentDataByProvince[code] || 0;
         const { trend, data, percentChange } = calculateTrend(code, quarterObj.id);
         
-        feature.properties.riceData = {
+        feature.properties.cropData = {
           nilai: currentValue,
           trendData: data,
           trend: trend,
           percentChange: percentChange || 0,
           satuan: "Ton",
           nama: feature.properties.name || feature.properties.nama,
+          kategori: categoryToUse.name
         };
       });
 
       return cloned;
     },
-    [extractDataFromBpsResponse, calculateTrend, historicalData]
+    [extractDataFromBpsResponse, calculateTrend, historicalData, selectedCategory]
   );
 
   const getColor = (trend) => {
@@ -260,7 +278,7 @@ const Map = () => {
   };
 
   const geoJSONStyle = useCallback((feature) => {
-    const trend = feature.properties?.riceData?.trend || "nodata";
+    const trend = feature.properties?.cropData?.trend || "nodata";
     return {
       fillColor: getColor(trend),
       weight: 1,
@@ -299,12 +317,13 @@ const Map = () => {
         mouseover: (e) => {
           const l = e.target;
           l.setStyle({ weight: 3, color: "#000", fillOpacity: 0.9 });
-          const rice = feature.properties?.riceData?.nilai || 0;
-          const trend = feature.properties?.riceData?.trend || "nodata";
-          const trendData = feature.properties?.riceData?.trendData || [];
-          const percentChange = feature.properties?.riceData?.percentChange || 0;
-          const name = feature.properties?.riceData?.nama || "";
-          const satuan = feature.properties?.riceData?.satuan || "";
+          const crop = feature.properties?.cropData?.nilai || 0;
+          const trend = feature.properties?.cropData?.trend || "nodata";
+          const trendData = feature.properties?.cropData?.trendData || [];
+          const percentChange = feature.properties?.cropData?.percentChange || 0;
+          const name = feature.properties?.cropData?.nama || "";
+          const satuan = feature.properties?.cropData?.satuan || "";
+          const kategori = feature.properties?.cropData?.kategori || "";
           
           const trendText = trend === "nodata" ? "Data tidak cukup" :
                           trend === "up" ? "Naik" :
@@ -316,7 +335,7 @@ const Map = () => {
           
           l.bindTooltip(
             `<strong>${name}</strong><br />
-            Produksi Saat Ini: ${rice.toLocaleString("id-ID", {
+            Produksi ${kategori} Saat Ini: ${crop.toLocaleString("id-ID", {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
             })} ${satuan}<br />
@@ -341,17 +360,39 @@ const Map = () => {
 
   const handleQuarterChange = (quarter) => {
     setSelectedQuarter(quarter);
+    updateMapData(quarter, selectedCategory);
+  };
+
+  const handleCategoryChange = (category) => {
+    // Reset data states
+    setBpsData(null);
+    setHistoricalData({});
+    
+    // Update selected category
+    setSelectedCategory(category);
+    
+    // Explicitly fetch data with the new category
+    fetchBpsData(category);
+  };
+
+  const updateMapData = useCallback((quarter, category) => {
     if (geoJsonRef.current && geoData && bpsData) {
-      const updated = updateGeoDataWithTrendData(geoData, bpsData, quarter);
+      const updated = updateGeoDataWithTrendData(geoData, bpsData, quarter, category);
       geoJsonRef.current.clearLayers();
       geoJsonRef.current.addData(updated);
     }
-  };
+  }, [geoData, bpsData, updateGeoDataWithTrendData]);
+
+  useEffect(() => {
+    if (geoJsonRef.current && geoData && bpsData && Object.keys(historicalData).length > 0) {
+      updateMapData(selectedQuarter, selectedCategory);
+    }
+  }, [bpsData, historicalData, selectedCategory, selectedQuarter, updateMapData]);
 
   const prepareGeoData = useCallback(() => {
     if (!geoData || !bpsData || Object.keys(historicalData).length === 0) return null;
-    return updateGeoDataWithTrendData(geoData, bpsData, selectedQuarter);
-  }, [geoData, bpsData, selectedQuarter, updateGeoDataWithTrendData, historicalData]);
+    return updateGeoDataWithTrendData(geoData, bpsData, selectedQuarter, selectedCategory);
+  }, [geoData, bpsData, selectedQuarter, selectedCategory, updateGeoDataWithTrendData, historicalData]);
 
   if (!isClient) return <div>Loading map...</div>;
 
@@ -399,23 +440,51 @@ const Map = () => {
           background: "white",
           padding: "10px",
           borderRadius: "5px",
-          boxShadow: "0 0 10px rgba(0,0,0,0.2)"
+          boxShadow: "0 0 10px rgba(0,0,0,0.2)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px"
         }}
       >
-        <label>Pilih Kuartal: </label>
-        <select
-          value={selectedQuarter.id}
-          onChange={(e) => {
-            const quarter = quarters.find((q) => q.id === parseInt(e.target.value));
-            handleQuarterChange(quarter);
-          }}
-        >
-          {quarters.map((quarter) => (
-            <option key={quarter.id} value={quarter.id}>
-              {quarter.name}
-            </option>
-          ))}
-        </select>
+        <div>
+          <label>Pilih Kategori: </label>
+          <div style={{ display: "flex", gap: "5px", marginTop: "5px" }}>
+            {categories.map((category) => (
+              <button
+                key={category.id}
+                onClick={() => handleCategoryChange(category)}
+                style={{
+                  padding: "5px 10px",
+                  cursor: "pointer",
+                  background: selectedCategory.id === category.id ? "#3498DB" : "#f1f1f1",
+                  color: selectedCategory.id === category.id ? "white" : "black",
+                  border: "1px solid #ddd",
+                  borderRadius: "3px",
+                  fontWeight: selectedCategory.id === category.id ? "bold" : "normal"
+                }}
+              >
+                {category.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label>Pilih Kuartal: </label>
+          <select
+            value={selectedQuarter.id}
+            onChange={(e) => {
+              const quarter = quarters.find((q) => q.id === parseInt(e.target.value));
+              handleQuarterChange(quarter);
+            }}
+            style={{ marginTop: "5px", padding: "5px", width: "100%" }}
+          >
+            {quarters.map((quarter) => (
+              <option key={quarter.id} value={quarter.id}>
+                {quarter.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div
@@ -430,7 +499,7 @@ const Map = () => {
           boxShadow: "0 0 10px rgba(0,0,0,0.2)"
         }}
       >
-        <h4>Tren Produksi Per Kuartal</h4>
+        <h4>Tren Produksi {selectedCategory.name} Per Kuartal</h4>
         <div>
           <span
             style={{
