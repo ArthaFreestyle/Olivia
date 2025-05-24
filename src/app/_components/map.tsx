@@ -33,8 +33,7 @@ const months = [
 ];
 
 const categories = [
-  { id: "Beras", name: "Padi", code: "2506" },
-  { id: "jagung", name: "Jagung Pipil", code: "2507" },
+  { id: "Beras", name: "Beras (GKG)", code: "2506" },
 ];
 
 const quarters = [
@@ -63,35 +62,19 @@ const quarters = [
 const Map = () => {
   const [geoData, setGeoData] = useState(null);
   const [bpsData, setBpsData] = useState(null);
+  const [priceData, setPriceData] = useState(null);
   const [historicalData, setHistoricalData] = useState({});
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedMonth, setSelectedMonth] = useState(months[0]);
-  const [selectedCategory, setSelectedCategory] = useState(categories[0]);
-
-  // Menentukan kuartal saat ini berdasarkan waktu saat ini
-  const getCurrentQuarter = () => {
+  const [selectedQuarter, setSelectedQuarter] = useState(() => {
     const currentDate = new Date();
-    const currentMonth = currentDate.getMonth() + 1; // getMonth() returns 0-11
-
-    // Menentukan kuartal berdasarkan bulan saat ini
-    let currentQuarterId;
-    if (currentMonth >= 1 && currentMonth <= 3) {
-      currentQuarterId = 1; // Q1 (Jan-Mar)
-    } else if (currentMonth >= 4 && currentMonth <= 6) {
-      currentQuarterId = 2; // Q2 (Apr-Jun)
-    } else if (currentMonth >= 7 && currentMonth <= 9) {
-      currentQuarterId = 3; // Q3 (Jul-Sep)
-    } else {
-      currentQuarterId = 4; // Q4 (Oct-Dec)
-    }
-
-    // Memastikan kita tidak memilih kuartal yang tidak ada dalam daftar
-    const availableQuarterId = Math.min(currentQuarterId, quarters.length);
-    return quarters.find((q) => q.id === availableQuarterId) || quarters[0];
-  };
-
-  // Inisialisasi dengan kuartal saat ini
-  const [selectedQuarter, setSelectedQuarter] = useState(getCurrentQuarter());
+    const currentMonth = currentDate.getMonth() + 1;
+    let currentQuarterId =
+      currentMonth <= 3 ? 1 : currentMonth <= 6 ? 2 : currentMonth <= 9 ? 3 : 4;
+    return quarters.find((q) => q.id === currentQuarterId) || quarters[0];
+  });
+  const [selectedProvince, setSelectedProvince] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const geoJsonRef = useRef(null);
   const [isClient, setIsClient] = useState(false);
 
@@ -102,103 +85,129 @@ const Map = () => {
   }, []);
 
   const API_KEY = "5065bedad441b6074ff02c53c82931c9";
+  const GEMINI_API_KEY = "AIzaSyAFQOp80HiW3Xd2W71madfy8CkBY7tEo_Y";
 
-  const fetchBpsData = useCallback(
-    async (category) => {
-      setIsLoading(true);
-      // Use the passed category or the current selectedCategory
-      const categoryToFetch = category || selectedCategory;
-
-      try {
-        const res = await fetch(
-          `https://webapi.bps.go.id/v1/api/list/model/data/lang/ind/domain/0000/var/${categoryToFetch.code}/key/${API_KEY}`
-        );
-        const data = await res.json();
-        if (data.status === "OK" && data["data-availability"] === "available") {
-          setBpsData(data);
-          // Ekstrak data historis untuk setiap bulan
-          const historicalDataObj = {};
-
-          // Iterasi melalui semua bulan untuk mengekstrak data historis
-          months.forEach((month) => {
-            // Use the passed category for extraction
-            const monthlyData = extractDataFromBpsResponse(
-              data,
-              month.code,
-              categoryToFetch
-            );
-            historicalDataObj[month.code] = monthlyData;
-          });
-
-          setHistoricalData(historicalDataObj);
-        } else {
-          console.error("Invalid BPS response", data);
-          setBpsData(null);
-          setHistoricalData({});
-        }
-      } catch (err) {
-        console.error("Fetch BPS error:", err);
+  const fetchBpsData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(
+        `https://webapi.bps.go.id/v1/api/list/model/data/lang/ind/domain/0000/var/2506/key/${API_KEY}`
+      );
+      const data = await res.json();
+      if (data.status === "OK" && data["data-availability"] === "available") {
+        setBpsData(data);
+        const historicalDataObj = {};
+        months.forEach((month) => {
+          historicalDataObj[month.code] = extractDataFromBpsResponse(
+            data,
+            month.code
+          );
+        });
+        setHistoricalData(historicalDataObj);
+      } else {
+        console.error("Invalid BPS response", data);
         setBpsData(null);
         setHistoricalData({});
-      } finally {
-        setIsLoading(false);
       }
-    },
-    [selectedCategory]
-  );
-
-  useEffect(() => {
-    fetchBpsData(selectedCategory);
-  }, [fetchBpsData, selectedCategory]);
-
-  useEffect(() => {
-    const loadGeo = async () => {
-      try {
-        const res = await fetch("/data/geo.json");
-        const data = await res.json();
-        setGeoData(data);
-      } catch (err) {
-        console.error("Failed to load GeoJSON:", err);
-      }
-    };
-    loadGeo();
+    } catch (err) {
+      console.error("Fetch BPS error:", err);
+      setBpsData(null);
+      setHistoricalData({});
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  const extractDataFromBpsResponse = useCallback(
-    (data, monthCode, category) => {
-      const result = {};
-      if (!data || !data.datacontent || !data.vervar) return result;
+  const fetchPriceData = useCallback(async () => {
+    try {
+      const res = await fetch(
+        "https://api-panelhargav2.badanpangan.go.id/api/front/harga-peta-provinsi?level_harga_id=3&komoditas_id=109&period_date=24%2F05%2F2025%20-%2024%2F05%2F2025&multi_status_map[0]=&multi_province_id[0]="
+      );
+      const data = await res.json();
+      if (data.status === "success") {
+        setPriceData(data);
+      } else {
+        setPriceData(null);
+      }
+    } catch (err) {
+      console.error("Fetch Price API error:", err);
+      setPriceData(null);
+    }
+  }, []);
 
-      // Use the passed category or fall back to the selected category
-      const categoryToUse = category || selectedCategory;
+  const fetchGeminiAnalysis = async (cropData) => {
+    setIsAnalyzing(true);
+    try {
+      const prompt = `
+        Anda adalah asisten AI yang menganalisis data produksi dan harga beras di suatu provinsi di Indonesia. Berikut adalah data untuk provinsi ${cropData.nama}:
+        - Produksi Beras (GKG) Saat Ini: ${cropData.nilai.toLocaleString("id-ID")} Ton
+        - Tren Produksi: ${cropData.trend === "up" ? "Naik" : cropData.trend === "down" ? "Turun" : cropData.trend === "stable" ? "Stabil" : "Data Tidak Cukup"} (${cropData.percentChange.toFixed(2)}%)
+        - Harga Beras SPHP: Rp${cropData.price.toLocaleString("id-ID")} / kg
+        - Status Harga: ${cropData.priceStatus} (${cropData.priceHppHapPercentage.toFixed(2)}% dari HET Rp${parseInt(cropData.priceHppHap).toLocaleString("id-ID")})
+        - Zona Harga: ${cropData.zoneName}
 
-      Object.keys(data.vervar).forEach((index) => {
-        const provCode = data.vervar[index].val;
-        if (provCode === "9999") return;
+        Berikan analisis singkat (maksimal 100 kata) untuk membantu pengambilan keputusan terkait produksi dan harga beras di provinsi ini. Pertimbangkan tren produksi, harga, dan status harga untuk memberikan rekomendasi, seperti apakah provinsi ini cocok untuk investasi, strategi pemasaran, atau kebijakan stabilisasi harga.
+      `;
 
-        const key = `${provCode}${categoryToUse.code}0125${monthCode}`;
-        if (data.datacontent[key]) {
-          result[provCode] = parseFloat(data.datacontent[key]);
+      const response = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: prompt,
+                  },
+                ],
+              },
+            ],
+          }),
         }
-      });
+      );
 
-      return result;
-    },
-    [selectedCategory]
-  );
+      const data = await response.json();
+      if (data.candidates && data.candidates[0].content) {
+        setAiAnalysis(data.candidates[0].content.parts[0].text);
+      } else {
+        setAiAnalysis("Gagal mengambil analisis dari Gemini API.");
+      }
+    } catch (err) {
+      console.error("Gemini API error:", err);
+      setAiAnalysis("Terjadi kesalahan saat mengambil analisis.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
-  // Fungsi untuk menghitung tren perbandingan kuartal
+  const extractDataFromBpsResponse = useCallback((data, monthCode) => {
+    const result = {};
+    if (!data || !data.datacontent || !data.vervar) return result;
+
+    Object.keys(data.vervar).forEach((index) => {
+      const provCode = data.vervar[index].val;
+      if (provCode === "9999") return;
+
+      const key = `${provCode}25060125${monthCode}`;
+      if (data.datacontent[key]) {
+        result[provCode] = parseFloat(data.datacontent[key]);
+      }
+    });
+
+    return result;
+  }, []);
+
   const calculateTrend = useCallback(
     (provinceCode, currentQuarter) => {
-      // Dapatkan kuartal saat ini dan kuartal sebelumnya
       const previousQuarter = currentQuarter - 1;
-
-      // Jika tidak ada kuartal sebelumnya, tidak bisa menghitung tren
       if (previousQuarter < 1) {
         return { trend: "nodata", data: [] };
       }
 
-      // Dapatkan bulan-bulan yang termasuk dalam kuartal saat ini dan sebelumnya
       const currentQuarterMonths = months.filter(
         (m) => m.quarter === currentQuarter
       );
@@ -206,7 +215,6 @@ const Map = () => {
         (m) => m.quarter === previousQuarter
       );
 
-      // Hitung total produksi untuk kuartal saat ini
       let currentQuarterTotal = 0;
       let currentQuarterMonthsWithData = 0;
       currentQuarterMonths.forEach((month) => {
@@ -217,7 +225,6 @@ const Map = () => {
         }
       });
 
-      // Hitung total produksi untuk kuartal sebelumnya
       let previousQuarterTotal = 0;
       let previousQuarterMonthsWithData = 0;
       previousQuarterMonths.forEach((month) => {
@@ -228,7 +235,6 @@ const Map = () => {
         }
       });
 
-      // Jika tidak ada data yang cukup dari salah satu kuartal, tidak bisa dihitung trendnya
       if (
         currentQuarterMonthsWithData === 0 ||
         previousQuarterMonthsWithData === 0
@@ -236,23 +242,19 @@ const Map = () => {
         return { trend: "nodata", data: [] };
       }
 
-      // Hitung rata-rata per kuartal untuk perbandingan yang adil
       const currentQuarterAvg =
         currentQuarterTotal / currentQuarterMonthsWithData;
       const previousQuarterAvg =
         previousQuarterTotal / previousQuarterMonthsWithData;
 
-      // Hitung persentase perubahan
       const percentChange =
         ((currentQuarterAvg - previousQuarterAvg) / previousQuarterAvg) * 100;
 
-      // Tentukan tren berdasarkan perubahan persentase
       let trend;
-      if (percentChange > 5) trend = "up"; // Naik jika lebih dari 5%
-      else if (percentChange < -5) trend = "down"; // Turun jika kurang dari -5%
-      else trend = "stable"; // Stabil jika perubahannya kecil
+      if (percentChange > 5) trend = "up";
+      else if (percentChange < -5) trend = "down";
+      else trend = "stable";
 
-      // Kumpulkan data untuk ditampilkan
       const quarterData = [
         {
           quarter: previousQuarter,
@@ -277,65 +279,193 @@ const Map = () => {
     [historicalData]
   );
 
-  const updateGeoDataWithTrendData = useCallback(
-    (geo, bps, quarterObj, category) => {
-      if (!geo || !bps || Object.keys(historicalData).length === 0) return geo;
+  const normalizeProvinceCode = (code) => {
+    const codeMap = {
+      "1100": "ID-AC",
+      "1200": "ID-SU",
+      "1300": "ID-SB",
+      "1400": "ID-RI",
+      "1500": "ID-JA",
+      "1600": "ID-SS",
+      "1700": "ID-BE",
+      "1800": "ID-LA",
+      "1900": "ID-KR",
+      "3100": "ID-JK",
+      "3200": "ID-JB",
+      "3300": "ID-JT",
+      "3400": "ID-YO",
+      "3500": "ID-JI",
+      "3600": "ID-BT",
+      "5100": "ID-BA",
+      "5200": "ID-NT",
+      "5300": "ID-NB",
+      "6100": "ID-KB",
+      "6200": "ID-KT",
+      "6300": "ID-KS",
+      "6400": "ID-KI",
+      "6500": "ID-KU",
+      "7100": "ID-SA",
+      "7200": "ID-ST",
+      "7300": "ID-SN",
+      "7400": "ID-SG",
+      "7500": "ID-GO",
+      "7600": "ID-SR",
+      "8100": "ID-MA",
+      "8200": "ID-MU",
+      "9100": "ID-PA",
+      "9200": "ID-PB",
+      "9300": "ID-PT",
+      "9400": "ID-PS",
+      "9500": "ID-PP",
+      "9700": "ID-PD",
+    };
+    return codeMap[code] || code;
+  };
 
-      // Use the passed category or fall back to the selected category
-      const categoryToUse = category || selectedCategory;
+  const getZoneForProvince = (provinceId, settingHarga) => {
+    const zoneMapping = {
+      11: "Zona 1",
+      12: "Zona 1",
+      13: "Zona 1",
+      14: "Zona 1",
+      15: "Zona 1",
+      16: "Zona 1",
+      17: "Zona 1",
+      1: "Zona 2",
+      2: "Zona 2",
+      3: "Zona 2",
+      4: "Zona 2",
+      5: "Zona 2",
+      6: "Zona 2",
+      7: "Zona 2",
+      8: "Zona 2",
+      10: "Zona 2",
+      20: "Zona 2",
+      21: "Zona 2",
+      22: "Zona 2",
+      23: "Zona 2",
+      24: "Zona 2",
+      25: "Zona 2",
+      27: "Zona 2",
+      28: "Zona 2",
+      29: "Zona 2",
+      19: "Zona 3",
+      31: "Zona 3",
+      34: "Zona 3",
+      35: "Zona 3",
+      38: "Zona 3",
+    };
+    const zoneName = zoneMapping[provinceId] || "Nasional";
+    const zoneData = settingHarga?.find((z) => z.nama_zona === zoneName) || 
+                    settingHarga?.find((z) => z.nama_zona === "Nasional") || 
+                    { harga_provinsi: "12500", nama_zona: "Nasional" };
+    return zoneData;
+  };
+
+  const updateGeoDataWithTrendData = useCallback(
+    (geo, bps, quarterObj) => {
+      if (!geo || !bps || Object.keys(historicalData).length === 0 || !priceData) {
+        return geo;
+      }
 
       const cloned = JSON.parse(JSON.stringify(geo));
-      // Ambil data dari bulan terakhir dalam kuartal untuk nilai saat ini
       const lastMonthInQuarter =
         quarterObj.months[quarterObj.months.length - 1];
       const currentDataByProvince = extractDataFromBpsResponse(
         bps,
-        lastMonthInQuarter.code,
-        categoryToUse
+        lastMonthInQuarter.code
       );
 
-      cloned.features.forEach((feature) => {
-        const code = feature.properties.kode || feature.properties.REGION_CODE;
-        if (code === "9999") return;
+      cloned.features.forEach((feature, index) => {
+        try {
+          const code = feature.properties.kode || feature.properties.REGION_CODE;
+          if (code === "9999") return;
 
-        const currentValue = currentDataByProvince[code] || 0;
-        const { trend, data, percentChange } = calculateTrend(
-          code,
-          quarterObj.id
-        );
+          const normalizedCode = normalizeProvinceCode(code);
+          const currentValue = currentDataByProvince[code] || 0;
+          const { trend, data, percentChange } = calculateTrend(code, quarterObj.id);
 
-        feature.properties.cropData = {
-          nilai: currentValue,
-          trendData: data,
-          trend: trend,
-          percentChange: percentChange || 0,
-          satuan: "Ton",
-          nama: feature.properties.name || feature.properties.nama,
-          kategori: categoryToUse.name,
-        };
+          const priceInfo = priceData?.data?.find(
+            (d) => d.province_kode === normalizedCode
+          ) || { rata_rata_geometrik: 0, status_map: "Data Tidak Tersedia", hpp_hap_percentage: 0, hpp_hap_percentage_gap_change: "no_change", province_id: 0 };
+          const provinceId = priceInfo.province_id || parseInt(code.replace(/\D/g, ""), 10) || 0;
+          const zoneInfo = priceData?.request_data?.setting_harga
+            ? getZoneForProvince(provinceId, priceData.request_data.setting_harga)
+            : { harga_provinsi: "12500", nama_zona: "Nasional" };
+
+          feature.properties.cropData = {
+            nilai: currentValue,
+            trendData: data,
+            trend: trend,
+            percentChange: percentChange || 0,
+            satuan: "Ton",
+            nama: feature.properties.name || feature.properties.nama,
+            kategori: "Beras (GKG)",
+            price: parseFloat(priceInfo.rata_rata_geometrik) || 12500,
+            priceStatus: priceInfo.status_map || "Data Tidak Tersedia",
+            priceHppHap: zoneInfo.harga_provinsi || "12500",
+            priceHppHapPercentage: priceInfo.hpp_hap_percentage || 0,
+            priceHppHapPercentageGapChange: priceInfo.hpp_hap_percentage_gap_change || "no_change",
+            priceSatuan: "Rp/kg",
+            priceKomoditas: priceData?.request_data?.komoditas_desc || "Beras SPHP",
+            zoneName: zoneInfo.nama_zona || "Tidak Diketahui",
+          };
+        } catch (error) {
+          console.error(`Error processing province ${index + 1}:`, error);
+        }
       });
 
       return cloned;
     },
-    [
-      extractDataFromBpsResponse,
-      calculateTrend,
-      historicalData,
-      selectedCategory,
-    ]
+    [extractDataFromBpsResponse, calculateTrend, historicalData, priceData]
   );
+
+  const updateMapData = useCallback(
+    (quarter) => {
+      if (geoJsonRef.current && geoData && bpsData && priceData) {
+        const updated = updateGeoDataWithTrendData(geoData, bpsData, quarter);
+        geoJsonRef.current.clearLayers();
+        geoJsonRef.current.addData(updated);
+      }
+    },
+    [geoData, bpsData, priceData, updateGeoDataWithTrendData]
+  );
+
+  useEffect(() => {
+    fetchBpsData();
+    fetchPriceData();
+  }, [fetchBpsData, fetchPriceData]);
+
+  useEffect(() => {
+    const loadGeo = async () => {
+      try {
+        const res = await fetch("/data/geo.json");
+        const data = await res.json();
+        setGeoData(data);
+      } catch (err) {
+        console.error("Failed to load GeoJSON:", err);
+      }
+    };
+    loadGeo();
+  }, []);
+
+  useEffect(() => {
+    if (priceData && geoData && bpsData) {
+      updateMapData(selectedQuarter);
+    }
+  }, [priceData, geoData, bpsData, selectedQuarter, updateMapData]);
 
   const getColor = (trend) => {
     switch (trend) {
       case "up":
-        return "#27AE60"; // hijau untuk tren naik (> +5%)
+        return "#27AE60";
       case "down":
-        return "#E74C3C"; // merah untuk tren turun (< -5%)
+        return "#E74C3C";
       case "stable":
-        return "#F1C40F"; // kuning untuk tren stabil (antara -5% sampai +5%)
+        return "#F1C40F";
       case "nodata":
       default:
-        return "#E5E5E5"; // abu-abu untuk tidak ada data
+        return "#E5E5E5";
     }
   };
 
@@ -378,20 +508,44 @@ const Map = () => {
     }
   };
 
+  const getStatusIcon = (status, gapChange) => {
+    if (status === "Tidak Ada Data" || status === "Data Tidak Tersedia") return "❓";
+    switch (gapChange) {
+      case "up":
+        return "↗️";
+      case "down":
+        return "↘️";
+      case "no_change":
+        return "→";
+      default:
+        return "❓";
+    }
+  };
+
   const onEachFeature = useCallback(
     (feature, layer) => {
       layer.on({
         mouseover: (e) => {
           const l = e.target;
           l.setStyle({ weight: 3, color: "#000", fillOpacity: 0.9 });
-          const crop = feature.properties?.cropData?.nilai || 0;
-          const trend = feature.properties?.cropData?.trend || "nodata";
-          const trendData = feature.properties?.cropData?.trendData || [];
-          const percentChange =
-            feature.properties?.cropData?.percentChange || 0;
-          const name = feature.properties?.cropData?.nama || "";
-          const satuan = feature.properties?.cropData?.satuan || "";
-          const kategori = feature.properties?.cropData?.kategori || "";
+          const cropData = feature.properties?.cropData || {};
+          const {
+            nilai: crop = 0,
+            trend = "nodata",
+            trendData = [],
+            percentChange = 0,
+            nama = "",
+            satuan = "Ton",
+            kategori = "Beras (GKG)",
+            price = 0,
+            priceStatus = "Data Tidak Tersedia",
+            priceHppHap = "0",
+            priceHppHapPercentage = 0,
+            priceHppHapPercentageGapChange = "no_change",
+            priceSatuan = "Rp/kg",
+            priceKomoditas = "Beras SPHP",
+            zoneName = "Tidak Diketahui",
+          } = cropData;
 
           const trendText =
             trend === "nodata"
@@ -407,8 +561,13 @@ const Map = () => {
               ? `(${percentChange > 0 ? "+" : ""}${percentChange.toFixed(2)}%)`
               : "";
 
+          const pricePercentChangeFormatted =
+            priceHppHapPercentage !== 0
+              ? `(${priceHppHapPercentage > 0 ? "+" : ""}${priceHppHapPercentage.toFixed(2)}%)`
+              : "";
+
           l.bindTooltip(
-            `<strong>${name}</strong><br />
+            `<strong>${nama}</strong><br />
             Produksi ${kategori} Saat Ini: ${crop.toLocaleString("id-ID", {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
@@ -416,7 +575,19 @@ const Map = () => {
             Tren Kuartal: ${getTrendIcon(
               trend
             )} ${trendText} ${percentChangeFormatted}<br />
-            <small>${formatTrendData(trendData)}</small>`,
+            <small>${formatTrendData(trendData)}</small><br />
+            <hr style="border-top: 1px solid #e5e7eb; margin: 8px 0;" />
+            Harga ${priceKomoditas}: ${price.toLocaleString(
+              "id-ID"
+            )} ${priceSatuan}<br />
+            Zona: ${zoneName}<br />
+            Status Harga: ${getStatusIcon(
+              priceStatus,
+              priceHppHapPercentageGapChange
+            )} ${priceStatus} ${pricePercentChangeFormatted}<br />
+            HET: ${parseInt(priceHppHap).toLocaleString(
+              "id-ID"
+            )} ${priceSatuan}<br />`,
             {
               permanent: false,
               direction: "center",
@@ -429,6 +600,11 @@ const Map = () => {
           l.setStyle(geoJSONStyle(feature));
           l.closeTooltip();
         },
+        click: () => {
+          setSelectedProvince(feature.properties?.cropData || {});
+          setAiAnalysis("");
+          fetchGeminiAnalysis(feature.properties?.cropData || {});
+        },
       });
     },
     [geoJSONStyle]
@@ -436,71 +612,15 @@ const Map = () => {
 
   const handleQuarterChange = (quarter) => {
     setSelectedQuarter(quarter);
-    updateMapData(quarter, selectedCategory);
+    updateMapData(quarter);
   };
-
-  const handleCategoryChange = (category) => {
-    // Reset data states
-    setBpsData(null);
-    setHistoricalData({});
-
-    // Update selected category
-    setSelectedCategory(category);
-
-    // Explicitly fetch data with the new category
-    fetchBpsData(category);
-  };
-
-  const updateMapData = useCallback(
-    (quarter, category) => {
-      if (geoJsonRef.current && geoData && bpsData) {
-        const updated = updateGeoDataWithTrendData(
-          geoData,
-          bpsData,
-          quarter,
-          category
-        );
-        geoJsonRef.current.clearLayers();
-        geoJsonRef.current.addData(updated);
-      }
-    },
-    [geoData, bpsData, updateGeoDataWithTrendData]
-  );
-
-  useEffect(() => {
-    if (
-      geoJsonRef.current &&
-      geoData &&
-      bpsData &&
-      Object.keys(historicalData).length > 0
-    ) {
-      updateMapData(selectedQuarter, selectedCategory);
-    }
-  }, [
-    bpsData,
-    historicalData,
-    selectedCategory,
-    selectedQuarter,
-    updateMapData,
-  ]);
 
   const prepareGeoData = useCallback(() => {
-    if (!geoData || !bpsData || Object.keys(historicalData).length === 0)
+    if (!geoData || !bpsData || Object.keys(historicalData).length === 0 || !priceData) {
       return null;
-    return updateGeoDataWithTrendData(
-      geoData,
-      bpsData,
-      selectedQuarter,
-      selectedCategory
-    );
-  }, [
-    geoData,
-    bpsData,
-    selectedQuarter,
-    selectedCategory,
-    updateGeoDataWithTrendData,
-    historicalData,
-  ]);
+    }
+    return updateGeoDataWithTrendData(geoData, bpsData, selectedQuarter);
+  }, [geoData, bpsData, selectedQuarter, updateGeoDataWithTrendData, historicalData, priceData]);
 
   if (!isClient) return <div>Loading map...</div>;
 
@@ -520,7 +640,7 @@ const Map = () => {
         style={{ width: "100%", height: "100%" }}
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        {geoData && bpsData && Object.keys(historicalData).length > 0 && (
+        {geoData && bpsData && Object.keys(historicalData).length > 0 && priceData && (
           <GeoJSON
             data={prepareGeoData()}
             style={geoJSONStyle}
@@ -549,25 +669,25 @@ const Map = () => {
       >
         <div>
           <button
-  onClick={() => window.history.back()}
-  style={{
-    padding: "0.5rem 0.75rem",
-    fontSize: "0.875rem",
-    borderRadius: "0.375rem",
-    backgroundColor: "#10b981", // emerald-500
-    color: "white",
-    fontWeight: 500,
-    border: "none",
-    cursor: "pointer",
-    marginBottom: "0.75rem",
-    transition: "background-color 0.2s",
-    boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
-  }}
-  onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#059669")} // emerald-600
-  onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#10b981")} // emerald-500
->
-  ← Kembali
-</button>
+            onClick={() => window.history.back()}
+            style={{
+              padding: "0.5rem 0.75rem",
+              fontSize: "0.875rem",
+              borderRadius: "0.375rem",
+              backgroundColor: "#10b981",
+              color: "white",
+              fontWeight: 500,
+              border: "none",
+              cursor: "pointer",
+              marginBottom: "0.75rem",
+              transition: "background-color 0.2s",
+              boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+            }}
+            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#059669")}
+            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#10b981")}
+          >
+            ← Kembali
+          </button>
 
           <h3
             style={{
@@ -579,37 +699,8 @@ const Map = () => {
               borderBottom: "1px solid #e5e7eb",
             }}
           >
-            Peta Produksi Pertanian
+            Peta Produksi Beras (GKG) dan Harga
           </h3>
-          <label>Pilih Kategori: </label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            {categories.map((category) => {
-              const isSelected = selectedCategory.id === category.id;
-              return (
-                <button
-                  key={category.id}
-                  onClick={() => handleCategoryChange(category)}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    fontSize: "0.875rem",
-                    borderRadius: "0.375rem",
-                    transition: "all 0.2s",
-                    border: "1px solid",
-                    backgroundColor: isSelected ? "#059669" : "white",
-                    color: isSelected ? "white" : "#374151",
-                    fontWeight: isSelected ? 500 : 400,
-                    boxShadow: isSelected
-                      ? "0 1px 2px rgba(0, 0, 0, 0.05)"
-                      : "none",
-                    borderColor: isSelected ? "#047857" : "#d1d5db",
-                    cursor: "pointer",
-                  }}
-                >
-                  {category.name}
-                </button>
-              );
-            })}
-          </div>
         </div>
         <div>
           <label>Pilih Kuartal: </label>
@@ -654,7 +745,7 @@ const Map = () => {
             borderBottom: "1px solid #e5e7eb",
           }}
         >
-          Tren Produksi {selectedCategory.name} Per Kuartal
+          Tren Produksi Beras (GKG) Per Kuartal
         </h4>
         <div>
           <span
@@ -709,17 +800,79 @@ const Map = () => {
         </div>
       </div>
 
+      {selectedProvince && (
+        <div
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            zIndex: 1000,
+            background: "white",
+            padding: "20px",
+            borderRadius: "8px",
+            boxShadow: "0 4px 15px rgba(0, 0, 0, 0.15)",
+            maxWidth: "400px",
+            width: "100%",
+            maxHeight: "80vh",
+            overflowY: "auto",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ fontSize: "1.25rem", fontWeight: 600, color: "#1f2937" }}>
+              {selectedProvince.nama || "Provinsi"}
+            </h3>
+            <button
+              onClick={() => setSelectedProvince(null)}
+              style={{
+                padding: "5px 10px",
+                fontSize: "0.875rem",
+                borderRadius: "0.375rem",
+                backgroundColor: "#ef4444",
+                color: "white",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              Tutup
+            </button>
+          </div>
+          <hr style={{ borderTop: "1px solid #e5e7eb", margin: "10px 0" }} />
+          <div style={{ fontSize: "0.9rem", color: "#1f2937", lineHeight: "1.5" }}>
+            <p><strong>Produksi Beras (GKG):</strong> {selectedProvince.nilai.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {selectedProvince.satuan}</p>
+            <p><strong>Tren Produksi:</strong> {getTrendIcon(selectedProvince.trend)} {selectedProvince.trend === "up" ? "Naik" : selectedProvince.trend === "down" ? "Turun" : selectedProvince.trend === "stable" ? "Stabil" : "Data Tidak Cukup"} ({selectedProvince.percentChange.toFixed(2)}%)</p>
+            <p><strong>Data Tren:</strong><br /><span dangerouslySetInnerHTML={{ __html: formatTrendData(selectedProvince.trendData) }} /></p>
+            <p><strong>Harga {selectedProvince.priceKomoditas}:</strong> Rp{selectedProvince.price.toLocaleString("id-ID")} / {selectedProvince.priceSatuan}</p>
+            <p><strong>Zona Harga:</strong> {selectedProvince.zoneName}</p>
+            <p><strong>Status Harga:</strong> {getStatusIcon(selectedProvince.priceStatus, selectedProvince.priceHppHapPercentageGapChange)} {selectedProvince.priceStatus} ({selectedProvince.priceHppHapPercentage.toFixed(2)}%)</p>
+            <p><strong>HET:</strong> Rp{parseInt(selectedProvince.priceHppHap).toLocaleString("id-ID")} / {selectedProvince.priceSatuan}</p>
+          </div>
+          <hr style={{ borderTop: "1px solid #e5e7eb", margin: "10px 0" }} />
+          <div>
+            <h4 style={{ fontSize: "1rem", fontWeight: 600, color: "#1f2937", marginBottom: "10px" }}>
+              Analisis AI
+            </h4>
+            {isAnalyzing ? (
+              <p style={{ color: "#64748b", fontStyle: "italic" }}>Menganalisis data...</p>
+            ) : (
+              <p style={{ fontSize: "0.9rem", color: "#1f2937", lineHeight: "1.5" }}>
+                {aiAnalysis || "Belum ada analisis tersedia."}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <style jsx global>{`
         .custom-tooltip {
           background: rgba(255, 255, 255, 0.95);
           border: none;
-          border-radius: 8px;
+          borderRadius: 8px;
           padding: 12px;
           box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
           max-width: 300px;
           font-family: system-ui, -apple-system, sans-serif;
           font-size: 14px;
-          line-height: 1.5;
+          lineHeight: 1.5;
         }
 
         .custom-tooltip strong {
