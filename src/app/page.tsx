@@ -337,7 +337,7 @@ export default function Home() {
               </CardContent>
               <CardFooter>
                 <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="w-full">
-                   <Link href={"https://olivia-g4htendadecwc7fu.canadacentral-01.azurewebsites.net/login"}>
+                   <Link href={"https://oliviaaja-cxfuggcqe4f4fuac.canadacentral-01.azurewebsites.net/login"}>
                     <Button variant="outline" className="w-full group">
                       Lihat Detail
                       <motion.div
